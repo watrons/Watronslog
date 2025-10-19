@@ -4,7 +4,7 @@ import re
 import json
 from datetime import datetime
 import threading
-import time
+import os
 
 app = Flask(__name__)
 
@@ -20,7 +20,7 @@ def is_valid_site(site):
     return re.match(pattern, site) is not None
 
 def format_log_message(data, site):
-    """API yanıtını formatla"""
+    """API yanıtını mesaj olarak formatla"""
     formatted = f"""📊 {site} Log Sorgulama
 ⏰ {datetime.now().strftime('%H:%M %d %b %a')}
 🔗 {site}
@@ -31,7 +31,7 @@ def format_log_message(data, site):
         for key, value in data.items():
             formatted += f"🔹 {key}: {value}\n"
     elif isinstance(data, list):
-        for i, item in enumerate(data):
+        for i, item in enumerate(data[:5]):  # İlk 5 kayıt
             if isinstance(item, dict):
                 formatted += f"\n[{i+1}] " + "-"*40 + "\n"
                 for key, value in item.items():
@@ -42,7 +42,7 @@ def format_log_message(data, site):
         formatted += f"Veri: {data}\n"
     
     formatted += f"\n" + "="*50 + "\n"
-    formatted += "🤖 API-BY-DRAGON\n"
+    formatted += "🤖 API-BY-WATRONS\n"
     formatted += f"✅ {REQUIRED_CHANNELS[0]}\n"
     formatted += f"✅ {REQUIRED_CHANNELS[1]}\n"
     
@@ -74,7 +74,7 @@ def create_file_content(data, site):
         content += f"Veri: {data}\n"
     
     content += f"\n{'='*50}\n"
-    content += "🤖 API-BY-DRAGON\n"
+    content += "🤖 API-BY-WATRONS\n"
     content += f"✅ {REQUIRED_CHANNELS[0]}\n"
     content += f"✅ {REQUIRED_CHANNELS[1]}\n"
     
@@ -99,7 +99,6 @@ def send_telegram_document(chat_id, file_content, filename, caption):
     """Telegram'a dosya gönder"""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
     
-    # Dosyayı multipart form-data olarak gönder
     files = {
         'document': (filename, file_content.encode('utf-8'))
     }
@@ -118,37 +117,25 @@ def send_telegram_document(chat_id, file_content, filename, caption):
 def process_log_request(chat_id, site):
     """Log sorgulama işlemini yönet"""
     try:
-        # Önce mesaj gönder
         wait_message = send_telegram_message(chat_id, "🔄 Loglar sorgulanıyor...")
         
-        # Nabi API'den veri çekme
         api_url = f'https://api.nabi.gt.tc/log?site={site}'
         response = requests.get(api_url, timeout=30)
         
         if response.status_code == 200:
             data = response.json()
             
-            # 1. Önce mesaj olarak gönder
+            # 1. Önce mesaj olarak göster
             message_text = format_log_message(data, site)
             send_telegram_message(chat_id, message_text)
             
             # 2. Sonra dosya olarak gönder
             file_content = create_file_content(data, site)
             filename = f"logs_{site}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-            caption = f"📊 {site} Log Sorgulama Sonuçları\n✅ @watronschecker & @nabisystem"
+            caption = f"📊 {site} Log Sorgulama Sonuçları\n✅ @watronschecker & @nabisystem\n🤖 API-BY-WATRONS"
             
             send_telegram_document(chat_id, file_content, filename, caption)
             
-            # Bekleme mesajını sil
-            if wait_message and 'result' in wait_message:
-                message_id = wait_message['result']['message_id']
-                delete_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
-                delete_data = {
-                    'chat_id': chat_id,
-                    'message_id': message_id
-                }
-                requests.post(delete_url, json=delete_data)
-                
         else:
             send_telegram_message(chat_id, f"❌ API hatası: {response.status_code}")
             
@@ -161,6 +148,7 @@ def home():
         "status": "online",
         "service": "Log Sorgulama API",
         "version": "1.0",
+        "api_by": "WATRONS",
         "channels": REQUIRED_CHANNELS
     })
 
@@ -197,7 +185,8 @@ def log_query():
             "status": "success",
             "message": "Sorgu başlatıldı",
             "site": site,
-            "chat_id": chat_id
+            "chat_id": chat_id,
+            "api_by": "WATRONS"
         })
         
     except Exception as e:
@@ -205,6 +194,17 @@ def log_query():
             "status": "error",
             "message": str(e)
         }), 500
+
+@app.route('/status')
+def status():
+    """API durum kontrolü"""
+    return jsonify({
+        "status": "active",
+        "timestamp": datetime.now().isoformat(),
+        "service": "Log Sorgulama API",
+        "api_by": "WATRONS",
+        "version": "1.0"
+    })
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -230,6 +230,8 @@ Kullanım:
 🔹 {REQUIRED_CHANNELS[0]}
 🔹 {REQUIRED_CHANNELS[1]}
 
+🤖 API-BY-WATRONS
+
 Komutlar:
 /start - Bu mesajı göster
 /log <site> - Log sorgula
@@ -250,35 +252,23 @@ Komutlar:
                     else:
                         send_telegram_message(chat_id, "❌ Geçersiz site adı!")
         
-        return jsonify({"status": "ok"})
+        return jsonify({"status": "ok", "api_by": "WATRONS"})
         
     except Exception as e:
         print(f"Webhook hatası: {e}")
         return jsonify({"status": "error"}), 500
 
-@app.route('/set_webhook', methods=['GET'])
-def set_webhook():
-    """Webhook'u ayarla"""
-    webhook_url = request.args.get('url')
-    if not webhook_url:
-        return jsonify({"status": "error", "message": "URL gereklidir"})
-    
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook"
-    payload = {
-        'url': webhook_url
-    }
-    
-    response = requests.post(url, json=payload)
-    return jsonify(response.json())
-
 if __name__ == '__main__':
     print("🚀 Flask API başlatılıyor...")
     print(f"📢 Zorunlu kanallar: {', '.join(REQUIRED_CHANNELS)}")
+    print("🤖 API-BY-WATRONS")
     print("🌐 API endpoint'leri:")
     print("   GET  /          - Durum kontrolü")
+    print("   GET  /status    - Sistem durumu")
     print("   GET  /log       - Log sorgula (chat_id & site parametreleri)")
     print("   POST /log       - Log sorgula (JSON body)")
     print("   POST /webhook   - Telegram webhook")
-    print("   GET  /set_webhook - Webhook URL'sini ayarla")
     
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Production için
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
